@@ -3,10 +3,102 @@
 function testMacro() {
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = spreadsheet.getSheetByName('calendar');
-  sheet.getRange(5,5).setValue('fortest');
+  const finder= sheet.createTextFinder("ゆう")
+  const f= finder.findAll()
+  console.log(f)
+  console.log(f[0].getColumn())
 };
 
-/* スケジュール管理オブジェクトテスト用 */
+const ctest=()=>{
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = spreadsheet.getSheetByName('calendar');
+  console.log(sheet.getRange("D2").getValue())
+  console.log(convertDateToString(sheet.getRange("D2").getValue()))
+}
+
+const inputHolidays=()=>{
+  for(let i = 0;i<holidays.length;i++){
+    console.log(`${holidays[i].getTitle()}:${convertDateToString(holidays[i].getStartTime())}:${convertDateToString(holidays[i].getEndTime())}` )
+  }
+}
+
+/* 休日記入クラス */
+class holidayWriter{
+  constructor(){
+  this.holidayCalendar=CalendarApp.getCalendarById("ja.japanese#holiday@group.v.calendar.google.com") 
+  }
+
+  //開始日を設定
+  setFirstDay(firstDay){
+    this.firstDay = firstDay
+  }
+
+  //終了日を設定
+  setLastDay(lastDay){
+    this.lastDay = lastDay   
+  }
+
+  getHolidays(){
+    this.holidays= this.holidayCalendar.getEvents(this.firstDay,this.lastDay)
+  }
+
+  setSheet(sheetName){
+    this.targetSheet=SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName)
+  }
+
+  //祝日と土日を反映する
+  writeHolidays(){
+
+    for (let col = 5;col < 500;col++){
+      
+      const targetCellValue = this.targetSheet.getRange(2,col).getValue()
+      if(targetCellValue==""){
+        continue
+      }
+
+      //土日に色を付ける
+      const targetCellWeekdayNumber =targetCellValue.getDay()
+      if(targetCellWeekdayNumber==5 || targetCellWeekdayNumber==6){
+        this.targetSheet.getRange(3,col).setBackground("#ea9999")
+      }
+
+      //祝日を反映する
+      for (let i =0;i <this.holidays.length;i++){
+        const targetHoliday= this.holidays[i].getStartTime()
+        const targetHolidayEndTimeString= convertDateToString(targetHoliday)
+
+        //何にも書いてないセルなら飛ばす
+        if (targetCellValue==""){
+          continue
+        }
+
+        const targetCellDateString= convertDateToString(targetCellValue)
+        console.log(`${targetCellDateString}: ${targetHolidayEndTimeString}`)
+
+        if (targetHolidayEndTimeString==targetCellDateString){
+          this.targetSheet.getRange(3,col).setBackground("#ea9999")
+          continue
+        }
+      }
+    }
+
+  }
+}
+
+const writeHolidays=()=>{
+  const sheet = SpreadsheetApp.getActive().getActiveSheet();
+  sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).setBackground('BACKGROUND');
+  const writer = new holidayWriter()
+  const f = new Date("2024/1/1")
+  const l = new Date("2024/12/31")
+  writer.setFirstDay(f)
+  writer.setLastDay(l)
+  writer.getHolidays(f,l)
+  writer.setSheet("calendar")
+  writer.writeHolidays()
+}
+
+/* スケジュール管理オブジェクト */
 class schduler {
   constructor(calendarId,firstDay,lastDay){
     this.calendar=CalendarApp.getCalendarById(calendarId) //対象カレンダー
@@ -38,7 +130,10 @@ class schduler {
     this.calendarSheet =SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName)
   }
 
-  /* スケジュール対象者の */
+  /* 予定の色番号についてメモ
+  何も設定していないデフォルトカラー→空欄
+  トマト→11,セージ→2,フラミンゴ→4
+   */
 
   /* 取得している全予定の対象日付をカレンダーシートに記入していく */
   writeAllScheduleX(){
@@ -48,18 +143,58 @@ class schduler {
       const scheduleTitle= this.allEvents[i].getTitle()
       const startTime = convertDateToString(this.allEvents[i].getStartTime())
       const endTime = convertDateToString(this.allEvents[i].getEndTime())
-      const scheduleColor = this.allEvents[i].getColor()
+      const scheduleColor = this.allEvents[i].getColor() //色番号については上記にメモってある
       const scheduleId = this.allEvents[i].getId()
+      const isAlldayEvent= this.allEvents[i].isAllDayEvent()
+
+      console.log(`${scheduleTitle} : ${scheduleColor}`)
 
       /* id タイトル記入 */
       this.calendarSheet.getRange(this.currentRow,1).setValue(scheduleId)
       this.calendarSheet.getRange(this.currentRow,2).setValue(scheduleTitle)
 
-      /* xを記入 */
-      inputScheduleX(this.calendarSheet,startTime,endTime,this.currentRow)
+      /* 日付の部分にxを記入 */
+      inputScheduleX(this.calendarSheet,startTime,endTime,this.currentRow,isAlldayEvent)
+
+      /* 対象者列にxを記入 */
+      this.writeXInTargetUserColumn(this.currentRow,scheduleColor)
 
       this.currentRow+=1
+    }
+  }
 
+  /* ゆう・まいの予定対象列を設定 */
+  setYumaiColumn(){
+    this.yukiColumn = this.calendarSheet.getRange("3:3").createTextFinder("ゆう").findAll()[0].getColumn()
+    this.maiColumn = this.calendarSheet.getRange("3:3").createTextFinder("まい").findAll()[0].getColumn()
+  }
+
+  /* そのスケジュールの所有者ユーザーの予定対象列を設定 */
+  setUserColumn(userName){
+    const finder = this.calendarSheet.getRange("3:3").createTextFinder(userName)
+    const foundCells= finder.findAll()
+    this.userColumn = foundCells[0].getColumn()
+  }
+
+  /* 予定の色から対象者列にxを記入 */
+  writeXInTargetUserColumn(currentRow,colorNumber){
+
+    /* 色を何も設定していないときは所有者の予定扱いになる */
+    if(!colorNumber){
+      this.calendarSheet.getRange(currentRow,this.userColumn).setValue("x")
+      return
+    }
+
+    /* 色が設定されている場合 */
+    if(colorNumber==11){ //二人の予定
+      this.calendarSheet.getRange(currentRow,this.yukiColumn).setValue("x")
+      this.calendarSheet.getRange(currentRow,this.maiColumn).setValue("x")
+    }else if(colorNumber==2){ //ゆうきの予定
+      this.calendarSheet.getRange(currentRow,this.yukiColumn).setValue("x")
+    }else if(colorNumber==4){ //まいの予定
+      this.calendarSheet.getRange(currentRow,this.maiColumn).setValue("x")
+    }else{ //それ以外の色はとりあえず所有者の予定としておく
+      this.calendarSheet.getRange(currentRow,this.userColumn).setValue("x")
     }
   }
 
@@ -68,6 +203,7 @@ class schduler {
     const lastRow=this.calendarSheet.getRange("B:B").getLastRow()
     const lastColumn=this.calendarSheet.getRange("2:2").getLastColumn()
     this.calendarSheet.getRange(4,1,lastRow-3,lastColumn).setValue("")
+    this.calendarSheet.getRange(4,1,lastRow-3,lastColumn).setBackground("BACKGROUND")
   }
 }
 
@@ -80,14 +216,21 @@ const main=()=>{
   yukiScheduler.fetchSchedules()
   yukiScheduler.setCalenderSheet("calendar")
   yukiScheduler.initCalendarSheet()
-  yukiScheduler.writeAllScheduleX()
+  yukiScheduler.setUserColumn("ゆう")
+  yukiScheduler.setYumaiColumn()
 
+  yukiScheduler.writeAllScheduleX()
 }
 
 /* シート上に予定の対象日付をxで表記 */
-const inputScheduleX=(sheet,startTime,endTime,currentRow)=>{
+const inputScheduleX=(sheet,startTime,endTime,currentRow,isAllDayEvent)=>{
   let startColumn = findTargetDateColumn(sheet,startTime)
   let endColumn = findTargetDateColumn(sheet,endTime)
+
+  //終日予定だとendTimeがその次の日になっている仕様のため-1入れて調整する
+  if (isAllDayEvent){
+    endColumn-= 1
+  }
 
   /* 一日のみの予定はとばす */
   if (startColumn==endColumn){
@@ -105,7 +248,7 @@ const inputScheduleX=(sheet,startTime,endTime,currentRow)=>{
 /* calendarシート上でyyyy/mm/dd形式の文字列がどの行に該当するか行番号を算出する */
 const findTargetDateColumn=(sheet,DateString)=>{
   let targetColumn
-  for(let i =1;i<100;i++){
+  for(let i =1;i<500;i++){ //とりあえず500
     const targetCell= sheet.getRange(2,i)
     const cellValue = targetCell.getValue()
 
@@ -115,7 +258,7 @@ const findTargetDateColumn=(sheet,DateString)=>{
     }
 
     const cellDateString=convertDateToString(cellValue)
-
+    
     if(cellDateString==DateString){
       targetColumn=i
       break
